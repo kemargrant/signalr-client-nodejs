@@ -456,84 +456,7 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
             setImmediate(sendPayload, payload);
         }
     }
-    function scheduleReconnection(isInitalRetry) {
-        //Ensure state is still reconnecting
-        if (_client.connection.state == states.connection.retryingConnection) {
-            if (isInitalRetry) {
-                _client.websocket.reconnectCount = 0;
-            } else {
-                _client.websocket.reconnectCount++;
-            }
-            var cancelRetry = false;
-            if (_client.serviceHandlers.reconnecting) {
-                var retry = { inital: isInitalRetry, count: _client.websocket.reconnectCount };
-                cancelRetry = _client.serviceHandlers.reconnecting.apply(client, [retry]);
-            }
-            if (!cancelRetry) {
-                setTimeout(function () {
-                    var connectQueryString = getConnectQueryString(_client);
-                    _client.websocket.client.connect(connectQueryString, undefined, undefined, _client.headers);
-                }, 1000 * _client.websocket.reconnectTimeout);
-                return true;
-            }
-            else {
-                _client.connection.state = states.connection.retryingFailed;
-            }
-        }
-        return false;
-    }
 
-    function abort() {
-
-        if (_client.connection.state === states.connection.disconnected || _client.connection.state === states.connection.disconnecting) {
-
-            var abortQueryString = getAbortQueryString(_client);
-
-            var abortUrlOptions = url.parse(abortQueryString, true);
-            var requestObject = undefined;
-
-
-            if (abortUrlOptions.protocol === 'http:') {
-                requestObject = http;
-            } else if (abortUrlOptions.protocol === 'wss:') {
-                abortUrlOptions.protocol = 'https:';
-                requestObject = https;
-            } else {
-                handlerErrors('Protocol Error', undefined, abortUrlOptions);
-            }
-
-            abortUrlOptions = {
-                hostname: abortUrlOptions.hostname,
-                port: abortUrlOptions.port,
-                method: 'POST',
-                path: abortUrlOptions.path
-            };
-
-            var req = requestObject.request(abortUrlOptions,
-            function (res) {
-
-                //console.log('STATUS: ' + res.statusCode);
-                //console.log('HEADERS: ' + JSON.stringify(res.headers));
-
-                res.on('data', function (chunk) {
-                    //str += chunk;
-                });
-
-                res.on('end', function () {
-                    console.log('Connection aborted');
-
-                });
-
-            });
-
-            req.on('error', function (e) {
-                handlerErrors('Can\'t abort connection', e, abortUrlOptions);
-            });
-
-            req.end();
-        }
-
-    };
 
     function startCommunication(onSuccess, onError) {
 
@@ -651,31 +574,18 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
     };
 
     _client.websocket.client.on('connectFailed', function (error) {
-        if (_client.connection.state == states.connection.retryingConnection
-            && scheduleReconnection(false)) {
-        } else {
             _client.connection.state = states.connection.connectFailed;
             if (_client.serviceHandlers.connectFailed) {
                 _client.serviceHandlers.connectFailed.apply(client, [error]);
             } else {
                 console.log("Connect Failed!");
             }
-        }
+        
     });
     _client.websocket.client.on('connect', function (connection) {
         _client.websocket.connection = connection;
         _client.websocket.messageid = 0; //Reset MessageID on new connection
-
-        //Note: check for reconnecting
-        if (_client.connection.state == states.connection.retryingConnection) {
-            //Note: reconnected event
-            if (_client.serviceHandlers.reconnected) {
-                _client.serviceHandlers.reconnected.apply(client, [connection]);
-            } else {
-                console.log("Reconnected!");
-            }
-        } else {
-            if (_client.serviceHandlers.connected) {
+         if (_client.serviceHandlers.connected) {
                 startCommunication(function (data) {
 
                     _client.serviceHandlers.connected.apply(client, [connection]);
@@ -684,39 +594,22 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
             } else {
                 console.log("Connected!");
             }
-        }
+        
         connection.on('error', function (error) {
             _client.websocket.connection = undefined;
             _client.connection.state = states.connection.errorOccured;
-
-            //Note: Add support for automatic retry
-            if (error.code == "ECONNRESET") {
-                _client.connection.state = states.connection.retryingConnection;
-                if (_client.serviceHandlers.connectionLost) {
-                    _client.serviceHandlers.connectionLost.apply(client, [error]);
-                } else {
-                    console.log("Scheduled Reconnection: " + error.toString());
-                }
-                scheduleReconnection(true);
-            } else {
-                if (_client.serviceHandlers.onerror) {
-                    _client.serviceHandlers.onerror.apply(client, [error]);
+            if (_client.serviceHandlers.onerror) {
+               _client.serviceHandlers.onerror.apply(client, [error]);
                 } else {
                     console.log("Connection Error: " + error.toString());
-                }
             }
         });
         connection.on('close', function () {
-            if (_client.connection.state != states.connection.retryingConnection) {
-                _client.connection.state = states.connection.disconnected;
-            }
             if (_client.serviceHandlers.disconnected) {
                 _client.serviceHandlers.disconnected.apply(client);
             }
-            //Abort connection
-            abort();
-
             _client.websocket.connection = undefined; //Release connection on close
+            console.log("Connection Released:",new Date());
         });
         connection.on('message', function (message) {
             var handled = false;
