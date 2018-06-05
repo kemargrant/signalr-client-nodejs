@@ -13,7 +13,7 @@ var url = require('url'),
     querystring = require('querystring'),
     http = require('http'),
     https = require('https'),
-    WebSocketClient = require('websocket').client; // https://github.com/Worlize/WebSocket-Node
+    WebSocketClient = require('ws'); https://github.com/websockets/ws
 
 var states = {
     connection: {
@@ -325,11 +325,9 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
 
         // https://github.com/Worlize/WebSocket-Node
         websocket: {
-            client: new WebSocketClient(),
+            client: WebSocketClient,
             connection: null,
             messageid: 0,
-            reconnectTimeout: reconnectTimeout || 10,
-            reconnectCount: 0
         }
     };
 
@@ -445,7 +443,7 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
 
         var payload = buildPayload(_hub.data.name, methodName, args, ++_client.websocket.messageid);
         //try to send message to signalR host
-        sendPayload(payload);
+        sendPayload(payload)
         return payload;
     };
 
@@ -567,83 +565,81 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
 
             //connect to websockets
             var connectQueryString = getConnectQueryString(_client);
-            _client.websocket.client.connect(connectQueryString, undefined, undefined, _client.headers);
+            var client;
+            client = new WebSocketClient(connectQueryString);
+			client.onmessage = (message)=> {
+				var handled = false;
+	            if (_client.serviceHandlers.messageReceived) {
+	                handled = _client.serviceHandlers.messageReceived.apply(client, [{utf8Data:message.data}]);
+	            }
+	            if (!handled) {
+	                //{"C":"d-8F1AB453-B,0|C,0|D,1|E,0","S":1,"M":[]}
+	                if (message.type === 'utf8' && message.utf8Data != "{}") {
+	                    var parsed = JSON.parse(message.utf8Data);
+	
+	                    //{"C":"d-74C09D5E-B,1|C,0|D,1|E,0","M":[{"H":"TestHub","M":"addMessage","A":["ie","sgds"]}]}
+	                    if (parsed.hasOwnProperty('M')) {
+	                        for (var i = 0; i < parsed.M.length; i++) {
+	                            var mesg = parsed.M[i];
+	                            var hubName = mesg.H.toLowerCase();
+	                            var handler = _client.handlers[hubName];
+	                            if (handler) {
+	                                var methodName = mesg.M.toLowerCase();
+	                                var method = handler[methodName];
+	                                if (method) {
+	                                    var hub = client.hub(hubName)
+	                                    method.apply(hub, mesg.A);
+	                                }
+	                            }
+	                        }
+	                    }
+						else if (parsed.hasOwnProperty('I')) {
+							handleCallResult(+parsed.I, parsed.E, parsed.R);
+						}
+	                }
+	            }
+	        };
+			client.onclose = ()=> {
+				
+	            if (_client.serviceHandlers.disconnected) {
+	                _client.serviceHandlers.disconnected.apply(client);
+	            } 
+	            console.log("Connection Released:",new Date());
+	            return _client.websocket.connection = undefined; //Release connection on close
+				};	
+			client.onerror = (error)=> {
+		            _client.connection.state = states.connection.errorOccured;
+		            if (_client.serviceHandlers.onerror) {
+		               _client.serviceHandlers.onerror.apply(client, [error]);
+		                } else {
+		                    console.log("Connection Error: " + error.toString());
+		            }
+		             _client.websocket.connection = undefined;
+		        }; 					    
+		    client.onopen = (connection)=> {
+   
+
+				 _client.websocket.connection = connection.target;
+				 //console.log("send:",connection.target.send)
+		        _client.websocket.messageid = 0; //Reset MessageID on new connection
+		         if (_client.serviceHandlers.connected) {
+		                startCommunication(function (data) {
+		
+		                    _client.serviceHandlers.connected.apply(client, [connection.target]);
+		                },
+		                handlerErrors);
+		            } else {
+		                console.log("Connected!");
+		            }
+		    };
+            
+             _client.websocket = client;
+            //_client.websocket.client = connect(connectQueryString, undefined, undefined, _client.headers);
+            
             return false;
         }
         return true;
     };
-
-    _client.websocket.client.on('connectFailed', function (error) {
-            _client.connection.state = states.connection.connectFailed;
-            if (_client.serviceHandlers.connectFailed) {
-                _client.serviceHandlers.connectFailed.apply(client, [error]);
-            } else {
-                console.log("Connect Failed!");
-            }
-        
-    });
-    _client.websocket.client.on('connect', function (connection) {
-        _client.websocket.connection = connection;
-        _client.websocket.messageid = 0; //Reset MessageID on new connection
-         if (_client.serviceHandlers.connected) {
-                startCommunication(function (data) {
-
-                    _client.serviceHandlers.connected.apply(client, [connection]);
-                },
-                handlerErrors);
-            } else {
-                console.log("Connected!");
-            }
-        
-        connection.on('error', function (error) {
-            _client.websocket.connection = undefined;
-            _client.connection.state = states.connection.errorOccured;
-            if (_client.serviceHandlers.onerror) {
-               _client.serviceHandlers.onerror.apply(client, [error]);
-                } else {
-                    console.log("Connection Error: " + error.toString());
-            }
-        });
-        connection.on('close', function () {
-            if (_client.serviceHandlers.disconnected) {
-                _client.serviceHandlers.disconnected.apply(client);
-            }
-            _client.websocket.connection = undefined; //Release connection on close
-            console.log("Connection Released:",new Date());
-        });
-        connection.on('message', function (message) {
-            var handled = false;
-            if (_client.serviceHandlers.messageReceived) {
-                handled = _client.serviceHandlers.messageReceived.apply(client, [message]);
-            }
-            if (!handled) {
-                //{"C":"d-8F1AB453-B,0|C,0|D,1|E,0","S":1,"M":[]}
-                if (message.type === 'utf8' && message.utf8Data != "{}") {
-                    var parsed = JSON.parse(message.utf8Data);
-
-                    //{"C":"d-74C09D5E-B,1|C,0|D,1|E,0","M":[{"H":"TestHub","M":"addMessage","A":["ie","sgds"]}]}
-                    if (parsed.hasOwnProperty('M')) {
-                        for (var i = 0; i < parsed.M.length; i++) {
-                            var mesg = parsed.M[i];
-                            var hubName = mesg.H.toLowerCase();
-                            var handler = _client.handlers[hubName];
-                            if (handler) {
-                                var methodName = mesg.M.toLowerCase();
-                                var method = handler[methodName];
-                                if (method) {
-                                    var hub = client.hub(hubName)
-                                    method.apply(hub, mesg.A);
-                                }
-                            }
-                        }
-                    }
-					else if (parsed.hasOwnProperty('I')) {
-						handleCallResult(+parsed.I, parsed.E, parsed.R);
-					}
-                }
-            }
-        });
-    });
 
     _client.getBinding = function () {
         getBindings(baseUrl, hubs, function (bindings) {
