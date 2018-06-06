@@ -443,7 +443,7 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
 
         var payload = buildPayload(_hub.data.name, methodName, args, ++_client.websocket.messageid);
         //try to send message to signalR host
-        sendPayload(payload)
+        sendPayload(payload);
         return payload;
     };
 
@@ -453,6 +453,8 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
         } else {
             setImmediate(sendPayload, payload);
         }
+      //console.log(_client.websocket.connection.send.toString(),payload)
+
     }
 
 
@@ -541,16 +543,6 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
             || _client.connection.state == states.connection.connecting) {
             return true;
         }
-        //unbound: 0,
-        //bindingError: 9,
-        else if (_client.connection.state == states.connection.bindingError
-            || _client.connection.state == states.connection.unbound) {
-            if (!tryOnceAgain) {
-                _client.getBinding();
-                setImmediate(_client.start, true);
-            }
-            return false;
-        }
         //bound: 1,
         //disconnecting: 4,
         //disconnected: 5,
@@ -566,37 +558,17 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
             //connect to websockets
             var connectQueryString = getConnectQueryString(_client);
             var client;
+            var type;
             client = new WebSocketClient(connectQueryString);
 			client.onmessage = (message)=> {
+				message = message.data;
+				type = JSON.parse(message);
 				var handled = false;
 	            if (_client.serviceHandlers.messageReceived) {
-	                handled = _client.serviceHandlers.messageReceived.apply(client, [{utf8Data:message.data}]);
+	                handled = _client.serviceHandlers.messageReceived.apply(client, [{utf8Data:message}]);
 	            }
-	            if (!handled) {
-	                //{"C":"d-8F1AB453-B,0|C,0|D,1|E,0","S":1,"M":[]}
-	                if (message.type === 'utf8' && message.utf8Data != "{}") {
-	                    var parsed = JSON.parse(message.utf8Data);
-	
-	                    //{"C":"d-74C09D5E-B,1|C,0|D,1|E,0","M":[{"H":"TestHub","M":"addMessage","A":["ie","sgds"]}]}
-	                    if (parsed.hasOwnProperty('M')) {
-	                        for (var i = 0; i < parsed.M.length; i++) {
-	                            var mesg = parsed.M[i];
-	                            var hubName = mesg.H.toLowerCase();
-	                            var handler = _client.handlers[hubName];
-	                            if (handler) {
-	                                var methodName = mesg.M.toLowerCase();
-	                                var method = handler[methodName];
-	                                if (method) {
-	                                    var hub = client.hub(hubName)
-	                                    method.apply(hub, mesg.A);
-	                                }
-	                            }
-	                        }
-	                    }
-						else if (parsed.hasOwnProperty('I')) {
-							handleCallResult(+parsed.I, parsed.E, parsed.R);
-						}
-	                }
+	            if (type.R) {
+					handleCallResult(+type.I, type.E, type.R);
 	            }
 	        };
 			client.onclose = ()=> {
@@ -620,7 +592,6 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
    
 
 				 _client.websocket.connection = connection.target;
-				 //console.log("send:",connection.target.send)
 		        _client.websocket.messageid = 0; //Reset MessageID on new connection
 		         if (_client.serviceHandlers.connected) {
 		                startCommunication(function (data) {
@@ -632,7 +603,6 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
 		                console.log("Connected!");
 		            }
 		    };
-            
              _client.websocket = client;
             //_client.websocket.client = connect(connectQueryString, undefined, undefined, _client.headers);
             
@@ -665,7 +635,6 @@ function clientInterface(baseUrl, hubs, reconnectTimeout, doNotStart) {
             if (_client.serviceHandlers.bound) {
                 _client.serviceHandlers.bound.apply(client);
             }
-
             _client.start(true);
         }, (_client.serviceHandlers.onerror ? client.serviceHandlers.onerror : handlerErrors), _client);
     };
